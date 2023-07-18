@@ -120,7 +120,7 @@ def get_df_qualia(file: TextIO) -> pd.DataFrame:
 def inv_sat(df_qual: pd.DataFrame) -> pd.DataFrame:
     # return color DataFrame with inverted qualia by saturation on HSV space
     df_inv = df_qual.copy()
-    df_inv.loc[:, 's'] = np.abs(df_inv.loc[:, 's'] - 1)
+    df_inv.loc[:, 's'] = np.abs(df_inv.loc[:, 's'] - 1).values
     df_inv.loc[:, ['r', 'g', 'b']]= (df_inv.loc[:, ['h', 's', 'v']].apply(hsv2rgb, axis=1).apply(pd.Series).values)
     df_inv.loc[:, ['c', 'i', 'e']]= (df_inv.loc[:, ['r', 'g', 'b']].apply(rgb2lab, axis=1).apply(pd.Series).values)
     return df_inv
@@ -129,7 +129,7 @@ def inv_sat(df_qual: pd.DataFrame) -> pd.DataFrame:
 def inv_val(df_qual: pd.DataFrame) -> pd.DataFrame:
     df_inv = df_qual.copy()
     # A function to invert data by luminosity
-    df_inv.loc[:, 'v'] = np.abs(df_inv.loc[:, 'v'] - 1)
+    df_inv.loc[:, 'v'] = np.abs(df_inv.loc[:, 'v'] - 1).values
     df_inv.loc[:, ['r', 'g', 'b']]= (df_inv.loc[:, ['h', 's', 'v']].apply(hsv2rgb, axis=1).apply(pd.Series).values)
     df_inv.loc[:, ['c', 'i', 'e']]= (df_inv.loc[:, ['r', 'g', 'b']].apply(rgb2lab, axis=1).apply(pd.Series).values)
     return df_inv
@@ -138,7 +138,7 @@ def inv_val(df_qual: pd.DataFrame) -> pd.DataFrame:
 def inv_hue(df_qual: pd.DataFrame) -> pd.DataFrame:
     df_inv = df_qual.copy()
     # A function that inverts the hues, R2L
-    df_inv.loc[:, 'h'] = np.abs(df_inv.loc[:, 'h'] - 1)
+    df_inv.loc[:, 'h'] = np.abs(df_inv.loc[:, 'h'] - 1).values
     df_inv.loc[:, ['r', 'g', 'b']]= (df_inv.loc[:, ['h', 's', 'v']].apply(hsv2rgb, axis=1).apply(pd.Series).values)
     df_inv.loc[:, ['c', 'i', 'e']]= (df_inv.loc[:, ['r', 'g', 'b']].apply(rgb2lab, axis=1).apply(pd.Series).values)
     return df_inv
@@ -147,7 +147,7 @@ def inv_hue(df_qual: pd.DataFrame) -> pd.DataFrame:
 def rand_hue(df_qual: pd.DataFrame) -> pd.DataFrame:
     df_inv = df_qual.copy()
     # A function to randomize hues
-    df_inv.loc[:, 'h'] = df_inv.loc[:, 'h'].sample(frac=1., replace=0)
+    df_inv.loc[:, 'h'] = df_inv.loc[:, 'h'].sample(frac=1., replace=0).values
     df_inv.loc[:, ['r', 'g', 'b']]= (df_inv.loc[:, ['h', 's', 'v']].apply(hsv2rgb, axis=1).apply(pd.Series).values)
     df_inv.loc[:, ['c', 'i', 'e']]= (df_inv.loc[:, ['r', 'g', 'b']].apply(rgb2lab, axis=1).apply(pd.Series).values)
     return df_inv
