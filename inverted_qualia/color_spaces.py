@@ -6,7 +6,10 @@ Map colors into DataFrames
 from typing import TextIO, Union, Callable
 import numpy as np
 import pandas as pd
+
+from pandas import IndexSlice as idx
 from skimage.color import rgb2hsv, rgb2lab, hsv2rgb
+
 
 class color():
     # A python class that receives a name and a hexadecimal RGB value for a color,

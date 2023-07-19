@@ -4,25 +4,29 @@ The subject needs to be able to cluster the colors by some algo and have a way
 to tell something about new colors.
 """
 
-from typing import Union, Callable, TextIO
-from pathlib import Path
-from sklearn.decomposition import PCA
-from sklearn.metrics import accuracy_score
-import sklearn.metrics as metrics
-import sklearn.cluster as clst
-from sklearn import svm
-import matplotlib.pyplot as plt
-import pandas as pd
 import numpy as np
-from sklearn.metrics import pairwise_distances, pairwise_distances_argmin
+import pandas as pd
+import sklearn.cluster as clst
+import sklearn.metrics as metrics
+import sklearn.manifold as skmanif
+import matplotlib.pyplot as plt
 
-from inverted_qualia.color_spaces import (get_df_qualia, inv_sat, inv_val, inv_hue, rand_hue,
-                           rand_all)
+from typing import Union, Callable, TextIO
+from sklearn import svm
+from pathlib import Path
+from sklearn.metrics import pairwise_distances, pairwise_distances_argmin, accuracy_score
+from sklearn.decomposition import PCA
+from tqdm.auto import tqdm
+
+from inverted_qualia.color_spaces import (
+    get_df_qualia, inv_sat, inv_val, inv_hue, rand_hue, rand_all
+)
+
 
 # Class that works as a collection of colors
 class Perceiver():
     # Available inversions
-    _inversions = (inv_sat, inv_val, inv_hue, rand_hue, rand_all)
+    _inversions = [inv_sat, inv_val, inv_hue, rand_hue, rand_all]
     # Color space labels
     _labels = labs = [[y for y in x] for x in ['rgb', 'hsv', 'cie']]
     # classifier state
@@ -31,18 +35,10 @@ class Perceiver():
     def __init__(
         self,
         file: TextIO,
-        inversion: Union[Callable[[pd.DataFrame], pd.DataFrame], None] = None,
-    ):
+        inversion: Callable | None = None,
+    ) -> None:
         # Set qualia
-        self.qualia, self.prototypes = self.set_qualia(file)
-        # If needed set an inversion
-        if inversion == None:
-            pass
-        elif inversion in self._inversions:
-            self.qualia = inversion(self.qualia)
-        else:
-            raise NotImplementedError('The requested inversion is not implemented.')
-
+        self.qualia, self.prototypes = self.set_qualia(file, inversion)
         # Set the dataframes for train and test
         self.set_classification_frames()
 
@@ -61,58 +57,122 @@ class Perceiver():
         # return the CIElab values of the qualia space
         return self.qualia.loc[:, self._labels[2]]
 
-    def set_qualia(self, file: TextIO) -> list[pd.DataFrame]:
+    def set_qualia(
+        self,
+        file: TextIO,
+        inversion: Callable | None = None,
+    ) -> list[pd.DataFrame]:
+        # Set the qualia dataframe
         df_qual = get_df_qualia(file)
+        # If needed do an inversion
+        if inversion == None:
+            pass
+        elif inversion in self._inversions:
+            df_qual = inversion(df_qual)
+        else:
+            raise NotImplementedError('The requested inversion is not implemented.')
+        # Set the prototypes
         df_prototype = (
             df_qual.loc[df_qual.loc[:, 'color_family'].dropna().unique(), :]
         )
         return df_qual, df_prototype
 
-    def plot_qualia(self) -> list[plt.figure, np.array]:
+    def plot_qualia_3d(self) -> list[plt.figure, np.array]:
+        # Labels for color spaces
+        labels = self._labels
+        # Plot qualia prototype groups
+        df_qualia, prototypes = self.qualia.dropna(subset='color_family'), self.prototypes
+        df_rgb = df_qualia.loc[:, ['r', 'g', 'b']]
+        axlabs = ['xlabel', 'ylabel', 'zlabel']
         # Plot the qualia space of the perceiver
         fig, axs = plt.subplots(
             nrows=1,
             ncols=3,
-            figsize=[15, 7],
+            figsize=[16, 5],
             subplot_kw=dict(projection='3d'),
         )
-        # Labels for color spaces
-        labs = self._labels
-        # Plot qualia prototype groups
-        qualia, prototypes = self.qualia, self.prototypes
-        axlabs = ['xlabel', 'ylabel', 'zlabel']
-        for ax, lab in zip(axs, labs):
-            # First plot the colors with prototypical labels
-            _ = [
-                ax.scatter3D(
-                    *qualia.loc[qualia.loc[:, 'color_family'] == c,
-                                lab].values.T,
-                    edgecolor=ser.loc[labs[0]].values,
-                    facecolor='w',
-                    s=75,
-                ) for c, ser in prototypes.iterrows()
-            ]
-            # Add the prototypes, larger and filled
-            _ = ax.scatter3D(
-                *prototypes.loc[:, lab].values.T,
-                s=150,
-                edgecolor='k',
-                c=prototypes.loc[:, labs[0]].values,
-            )
-            # Add labels to plot axes
+        for ax, lab in zip(axs.ravel(), labels):
+            df = df_qualia.loc[:, lab]
+            c = df_rgb.values
+            edgecolors = df_qualia.loc[:, 'color_family'].values
+            ax.scatter3D(*df.values.T, c=c, edgecolors=edgecolors)
+
             _ = ax.set(
                 **{
-                    x: r'$\bf{' + f'{lab.upper()}' + '}$'
-                    for x, lab in zip(axlabs, labs)
+                    x: r'$\bf{' + f'{l.upper()}' + '}$'
+                    for x, l in zip(axlabs, lab)
                 })
         return fig, axs
+
+    def plot_qualia_2d(self) -> list[plt.figure, np.array]:
+        df_qualia = self.qualia.dropna(subset='color_family')
+        labels = self._labels
+        df_rgb = df_qualia.loc[:, ['r', 'g', 'b']]
+        nrows = np.ceil(df_rgb.shape[0] / 10).astype(int)
+        fig, axs = plt.subplots(ncols=3, nrows=1, figsize=[16, 5])
+        for lab, ax in zip(labels, axs.ravel()):
+            df = df_qualia.loc[:, lab]
+            pca = PCA(n_components=2)
+            c = df_rgb.values
+            edgecolors = df_qualia.loc[:, 'color_family'].values
+            dim_red = pca.fit_transform(df.values)
+            ax.scatter(*dim_red.T, c=c, edgecolors=edgecolors)
+        return fig, axs.ravel()
+
+
+    def manifold_cluster(self, show: bool = False):
+        n_colors = self.prototypes.shape[0]
+        acc_metric = getattr(metrics, score_metric)
+        ret = []
+        if show:
+            fig, axs = plt.subplots(nrows=2, ncols=3, figsize=[16, 5])
+        labels = self._labels
+        for x, label in enumerate(labels):
+            # Get DFs
+            train = obs_.train.loc[:, label]
+            df_qualia = obs_.qualia.dropna(
+                subset='color_family').loc[:, label]
+            df_qualia_l = obs_.qualia.dropna(
+                subset='color_family').loc[:, 'color_family']
+            # prototypes as
+            df_prototypes = (
+                pd.concat([df_qualia, df_qualia_l],axis=1)
+                .groupby('color_family')
+                .median()
+            )
+            # Learn a map for the data that
+            manif_ = skmanif.Isomap(n_neighbors=10, n_components=2)
+            learn_s = manif_.fit_transform(df_qualia.values)
+            # Cluster on the new space
+            clustering = clst.KMeans(
+                n_clusters=df_prototypes.shape[0],
+                n_init=10,
+            )
+            preds = clustering.fit_predict(learn_s)
+            ixs_ql = df_qualia_l.unique()[preds]
+            idx_2_ids = pairwise_distances_argmin(
+                clustering.cluster_centers_,
+                df_prototypes.values,
+            )
+            dm = pairwise_distances(
+                clustering.cluster_centers_,
+                df_prototypes,
+            )
+
+            if show:
+                ax = axs[0, x]
+                c = observer.qualia.loc[df_qualia.index, ['r', 'g', 'b']].values
+                edgecolors = observer.qualia.loc[df_qualia.index,
+                                                 'color_family'].values
+                _ = ax.scatter(*learn_s.T, c=c, edgecolors=edgecolors)
+
+        pass
 
     def cluster_perception(self, show=False, score_metric="v_measure_score"):
         n_colors = self.prototypes.shape[0]
         acc_metric = getattr(metrics, score_metric)
         ret = []
         for label in self._labels:
-            clust = clst.KMeans(n_clusters=n_colors, n_init=n_colors)
             train = self.train.loc[:, label]
             train_l = self.train.loc[:, 'color_family']
             test = self.test.loc[:, label]
@@ -120,6 +180,7 @@ class Perceiver():
             df_eval = self.eval.dropna().loc[:, label]
             df_eval_l = self.eval.dropna().loc[:, 'color_family']
             prototypes = self.prototypes.loc[:, label]
+            clust = clst.KMeans(n_clusters=n_colors, n_init=n_colors)
             _ = clust.fit(train.values)
             # Compare the prototypes and the cluster centres, get closest labels
             idx_2_ids = pairwise_distances_argmin(
@@ -152,6 +213,15 @@ class Perceiver():
                 _ = axs[2].set_title('eval')
         return ret
 
+    def plot_2d_prototypes(self) -> list[plt.figure, np.array]:
+        fig, axs = plt.subplots(ncols=3, nrows=3, )
+        df_rgbs = self.prototypes.loc[:, ['r', 'g', 'b']]
+        for ax, (c_n, df) in zip(axs.ravel(), df_rgbs.iterrows()):
+            ax.set_facecolor(df.values)
+            ax.set_title(c_n)
+            ax.set(xticks=[], yticks=[])
+        return fig, axs.ravel()
+
     def set_classification_frames(self):
         # split train and test, use prototypes to train, always
         df_prototype = self.prototypes
@@ -172,16 +242,28 @@ class Perceiver():
         self.test = df_test
         self.eval = df_eval
 
-    def test_classification(self, score_metric="v_measure_score", n_iter=200):
+    def test_classification(self, score_metric="v_measure_score", n_iter=10):
         # use the learned classification scheme to the rest
         ret = [
             self.cluster_perception(score_metric=score_metric)
-            for _ in range(n_iter)
+            for _ in tqdm(range(n_iter))
         ]
         return ret
+
+
+def compare_qualia_spaces(observers: list[Perceiver]):
+    dfs_train = [obs.train for obs in observers]
+    common_ixs = observer[0]
+    pass
 
 
 if __name__ == "__main__":
     file_color = Path("assets/rgb.txt")
     observer = Perceiver(file_color)
+    observer_ih = Perceiver(file_color, inv_hue)
+    observer_is = Perceiver(file_color, inv_sat)
+    observer_iv = Perceiver(file_color, inv_val)
     scores = observer.test_classification()
+    scores_ih = observer_ih.test_classification()
+    scores_is = observer_is.test_classification()
+    scores_iv = observer_iv.test_classification()
