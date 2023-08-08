@@ -53,6 +53,60 @@ class color():
 # First column is a color name, second the RGB value in hexadecimal
 
 def get_df_qualia(file: TextIO) -> pd.DataFrame:
+    if 'rgb' in file.name:
+        ret = read_csv_rgb(file)
+    elif 'satfaces' in file.name:
+        ret = read_csv_satfaces(file)
+    else:
+        raise ValueError('is not possible to set a prototype DataFrame.')
+    return ret
+
+
+def read_csv_satfaces(file: TextIO) -> pd.DataFrame:
+    data = pd.read_csv(
+        file,
+        skiprows=1,
+        sep=']',
+        names=['rgb', 'name'],
+        usecols=['rgb', 'name'],
+        engine='c',
+    )
+    f_str = lambda x: np.array(x.split(' ')).astype(int).tolist()
+    # Quickly, just ravel the values, reshape and turn to dataframe
+    rgb = pd.DataFrame(
+        np.concatenate(
+            data.loc[:, 'rgb'].str.replace(",", "").str.replace('[', "").apply(f_str)
+        ).reshape([-1, 3]),
+        columns=['r', 'g', 'b'],
+    )/255
+    hsv = pd.DataFrame(
+        np.concatenate(rgb.apply(lambda x: rgb2hsv(x.values), axis=1)
+        ).reshape([-1, 3]),
+        columns=['h', 's', 'v'],
+    )
+    # CIElab columns
+    cie = pd.DataFrame(
+        np.concatenate(
+            rgb.apply(lambda x: rgb2lab(x.values, illuminant='D65', observer='2'),
+            axis=1)).reshape([-1, 3]),
+        columns=['c', 'i', 'e'],
+    )
+    # just add them together
+    ret = pd.concat([
+        data.loc[:, 'name'],
+        # Color space columns
+        rgb.astype(float), hsv.astype(float), cie.astype(float),
+        # The family columns
+        data.loc[:, 'name'].str.strip().rename('color_family'),
+    ], axis=1)
+    # remove the values with less than 100 elements
+    df_q_names = ret.groupby('name').size()
+    ret = ret[ret.name.isin(
+        df_q_names[df_q_names > 100].index)]
+    return ret
+
+
+def read_csv_rgb(file: TextIO) -> pd.DataFrame:
     # Load file as csv, somehow the file has an extra tab at the end
     data = pd.read_csv(
         file,
@@ -60,6 +114,7 @@ def get_df_qualia(file: TextIO) -> pd.DataFrame:
         sep='\t',
         names=['name', 'hexa_rgb', ''],
         usecols=['name', 'hexa_rgb'],
+        # engine='pyarrow',
     )
     # RGB columns
     rgb = (

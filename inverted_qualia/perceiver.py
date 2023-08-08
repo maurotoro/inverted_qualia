@@ -6,6 +6,8 @@ to tell something about new colors.
 
 import numpy as np
 import pandas as pd
+from datetime import datetime
+from datetime import timedelta
 import sklearn.cluster as clst
 import sklearn.metrics as metrics
 import sklearn.manifold as skmanif
@@ -14,9 +16,10 @@ import matplotlib.pyplot as plt
 from typing import Union, Callable, TextIO
 from sklearn import svm
 from pathlib import Path
-from sklearn.metrics import pairwise_distances, pairwise_distances_argmin, accuracy_score
-from sklearn.decomposition import PCA
 from tqdm.auto import tqdm
+from scipy.optimize import linear_sum_assignment as linear_assignment
+from sklearn.decomposition import PCA
+from sklearn.metrics import pairwise_distances, pairwise_distances_argmin, accuracy_score
 
 from inverted_qualia.color_spaces import (
     get_df_qualia, inv_sat, inv_val, inv_hue, rand_hue, rand_all
@@ -39,6 +42,7 @@ class Perceiver():
     ) -> None:
         # Set qualia
         self.qualia, self.prototypes = self.set_qualia(file, inversion)
+        self.inversion = inversion
         # Set the dataframes for train and test
         self.set_classification_frames()
 
@@ -63,19 +67,27 @@ class Perceiver():
         inversion: Callable | None = None,
     ) -> list[pd.DataFrame]:
         # Set the qualia dataframe
-        df_qual = get_df_qualia(file)
+        df_qualia = get_df_qualia(file)
         # If needed do an inversion
         if inversion == None:
             pass
         elif inversion in self._inversions:
-            df_qual = inversion(df_qual)
+            df_qualia = inversion(df_qualia)
         else:
             raise NotImplementedError('The requested inversion is not implemented.')
         # Set the prototypes
-        df_prototype = (
-            df_qual.loc[df_qual.loc[:, 'color_family'].dropna().unique(), :]
-        )
-        return df_qual, df_prototype
+        if "rgb" in file.name:
+            df_prototype = (
+                df_qualia.loc[df_qualia.loc[:, 'color_family'].dropna().unique(), :]
+            )
+        elif 'satfaces' in file.name:
+            cols = [l for ls in self._labels for l in ls] + ['color_family']
+            df_prototype = (
+                df_qualia.loc[:, cols].groupby('color_family').mean()
+            )
+        else:
+            raise ValueError('is not possible to set a prototype DataFrame.')
+        return df_qualia, df_prototype
 
     def plot_qualia_3d(self) -> list[plt.figure, np.array]:
         # Labels for color spaces
@@ -107,7 +119,7 @@ class Perceiver():
     def plot_qualia_2d(self) -> list[plt.figure, np.array]:
         df_qualia = self.qualia.dropna(subset='color_family')
         labels = self._labels
-        df_rgb = df_qualia.loc[:, ['r', 'g', 'b']]
+        df_rgb = df_qualia.loc[:, ['r', 'g', 'b']]/255
         nrows = np.ceil(df_rgb.shape[0] / 10).astype(int)
         fig, axs = plt.subplots(ncols=3, nrows=1, figsize=[16, 5])
         for lab, ax in zip(labels, axs.ravel()):
@@ -119,20 +131,18 @@ class Perceiver():
             ax.scatter(*dim_red.T, c=c, edgecolors=edgecolors)
         return fig, axs.ravel()
 
-
     def manifold_cluster(self, show: bool = False):
         n_colors = self.prototypes.shape[0]
-        acc_metric = getattr(metrics, score_metric)
         ret = []
         if show:
             fig, axs = plt.subplots(nrows=2, ncols=3, figsize=[16, 5])
         labels = self._labels
+        manifolds, clustering, clust_labels = dict(), dict(), dict()
         for x, label in enumerate(labels):
             # Get DFs
-            train = obs_.train.loc[:, label]
-            df_qualia = obs_.qualia.dropna(
+            df_qualia = self.qualia.dropna(
                 subset='color_family').loc[:, label]
-            df_qualia_l = obs_.qualia.dropna(
+            df_qualia_l = self.qualia.dropna(
                 subset='color_family').loc[:, 'color_family']
             # prototypes as
             df_prototypes = (
@@ -141,32 +151,51 @@ class Perceiver():
                 .median()
             )
             # Learn a map for the data that
-            manif_ = skmanif.Isomap(n_neighbors=10, n_components=2)
+            manif_ = skmanif.Isomap(n_neighbors=25, n_components=2, metric='euclidean')
             learn_s = manif_.fit_transform(df_qualia.values)
+            proto_manif = manif_.transform(df_prototypes.values)
             # Cluster on the new space
-            clustering = clst.KMeans(
+            clust_ = clst.KMeans(
                 n_clusters=df_prototypes.shape[0],
-                n_init=10,
+                n_init=30,
             )
-            preds = clustering.fit_predict(learn_s)
-            ixs_ql = df_qualia_l.unique()[preds]
-            idx_2_ids = pairwise_distances_argmin(
-                clustering.cluster_centers_,
-                df_prototypes.values,
+            preds = clust_.fit_predict(learn_s)
+            pred_labels = df_qualia_l.unique()[preds]
+            idx_2_ids = self.map_clst_to_labels(
+                df_qualia_l.values, pred_labels,
+                df_prototypes.index.values,
+                ret_labels=0
             )
             dm = pairwise_distances(
-                clustering.cluster_centers_,
-                df_prototypes,
+                clust_.cluster_centers_,
+                proto_manif,
             )
-
+            manifolds["".join(label)] = manif_
+            clustering["".join(label)] = clust_
+            clust_labels["".join(label)] = df_prototypes.iloc[idx_2_ids, :].index.values.tolist()
             if show:
                 ax = axs[0, x]
                 c = observer.qualia.loc[df_qualia.index, ['r', 'g', 'b']].values
-                edgecolors = observer.qualia.loc[df_qualia.index,
-                                                 'color_family'].values
-                _ = ax.scatter(*learn_s.T, c=c, edgecolors=edgecolors)
+                edgecolors = [
+                    f"xkcd:{c}" for c in observer.qualia.loc[df_qualia.index,'color_family'].values
+                ]
+                _ = ax.scatter(*learn_s[:, :2].T, c=c, edgecolors=edgecolors)
+        self.manifolds = manifolds
+        self.clustering = clustering
+        self.clust_labels = clust_labels
 
-        pass
+    @staticmethod
+    def map_clst_to_labels(true_labels, pred_labels, names, ret_labels=False):
+        # first make a confussion matrix relating true and predicted
+        cm = metrics.confusion_matrix(true_labels, pred_labels)
+        # Turn confussion into cost quickly
+        cm = (-cm + np.max(cm))
+        indexes = linear_assignment(cm)[1]
+        if ret_labels:
+            ret = [names[x] for x in indexes]
+        else:
+            ret = indexes
+        return ret
 
     def cluster_perception(self, show=False, score_metric="v_measure_score"):
         n_colors = self.prototypes.shape[0]
@@ -214,7 +243,14 @@ class Perceiver():
         return ret
 
     def plot_2d_prototypes(self) -> list[plt.figure, np.array]:
-        fig, axs = plt.subplots(ncols=3, nrows=3, )
+        ncols, nrows = [
+            func(np.sqrt(self.prototypes.shape[0])).astype(int)
+            for func in [np.ceil, np.floor]
+        ]
+        fig, axs = plt.subplots(
+            ncols=ncols,
+            nrows=nrows,
+        )
         df_rgbs = self.prototypes.loc[:, ['r', 'g', 'b']]
         for ax, (c_n, df) in zip(axs.ravel(), df_rgbs.iterrows()):
             ax.set_facecolor(df.values)
@@ -227,12 +263,12 @@ class Perceiver():
         df_prototype = self.prototypes
         df_qualia = self.qualia
         df_qualia = df_qualia.loc[~df_qualia.index.isin(df_prototype.index), :]
-        df_test = df_qualia.groupby('color_family').sample(n=5)
+        df_test = df_qualia.groupby('color_family').sample(n=25)
         df_train = (
             df_qualia.loc[~df_qualia.index.isin(df_test.index), :]
             .query('~color_family.isnull()')
             .groupby('color_family')
-            .sample(n=20)
+            .sample(frac=.90)
         )
         df_train = pd.concat([df_train, df_prototype])
         # Now for eval the rest
@@ -258,12 +294,14 @@ def compare_qualia_spaces(observers: list[Perceiver]):
 
 
 if __name__ == "__main__":
-    file_color = Path("assets/rgb.txt")
+    file_color = Path("assets/satfaces.txt")
+    now = datetime.now()
     observer = Perceiver(file_color)
-    observer_ih = Perceiver(file_color, inv_hue)
-    observer_is = Perceiver(file_color, inv_sat)
-    observer_iv = Perceiver(file_color, inv_val)
-    scores = observer.test_classification()
-    scores_ih = observer_ih.test_classification()
-    scores_is = observer_is.test_classification()
-    scores_iv = observer_iv.test_classification()
+    obs_load = datetime.now()
+    # observer_ih = Perceiver(file_color, inv_hue)
+    # observer_is = Perceiver(file_color, inv_sat)
+    # observer_iv = Perceiver(file_color, inv_val)
+    # scores = observer.test_classification()
+    # scores_ih = observer_ih.test_classification()
+    # scores_is = observer_is.test_classification()
+    # scores_iv = observer_iv.test_classification()
