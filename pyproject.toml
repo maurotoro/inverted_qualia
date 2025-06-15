@@ -1,0 +1,38 @@
+[build-system]
+requires = ["setuptools"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["inverted_qualia*"]
+namespaces = true
+
+[project]
+name = "inverted_qualia"
+version = "0.0.1"
+authors = [
+  { name="Mauricio Toro Espejo", email="mauro.toro.e@gmail.com" },
+]
+description = "A pythonic take on some philosophy."
+readme = "README.md"
+dynamic = ["dependencies"]
+requires-python = ">=3.11"
+classifiers = [
+    'Development Status :: 4 - Beta',
+    'Environment :: Console',
+    'Intended Audience :: Science/Research',
+    'Intended Audience :: Developers',
+    'Operating System :: OS Independent',
+    'Programming Language :: Python',
+    'Programming Language :: Python :: 3',
+    'Programming Language :: Python :: 3.11',
+    "Programming Language :: Python :: 3",
+    "License :: TBA",
+    "Operating System :: OS Independent",
+]
+
+[tool.setuptools.dynamic]
+dependencies = {file = ["requirements.txt"]}
+
+[project.urls]
+Homepage = "https://github.com/maurotoro/inverted_qualia"
+Issues = "https://github.com/maurotoro/inverted_qualia/issues"
