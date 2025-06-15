@@ -43,6 +43,8 @@ class Perceiver():
         # Set qualia
         self.qualia, self.prototypes = self.set_qualia(file, inversion)
         self.inversion = inversion
+        if self.inversion in self._inversions:
+            self.inv_name = self.inversion.__name__
         # Set the dataframes for train and test
         self.set_classification_frames()
 
@@ -83,17 +85,18 @@ class Perceiver():
         elif 'satfaces' in file.name:
             cols = [l for ls in self._labels for l in ls] + ['color_family']
             df_prototype = (
-                df_qualia.loc[:, cols].groupby('color_family').mean()
+                df_qualia.loc[:, cols].groupby('color_family').median()
             )
         else:
             raise ValueError('is not possible to set a prototype DataFrame.')
         return df_qualia, df_prototype
 
-    def plot_qualia_3d(self) -> list[plt.figure, np.array]:
+    def plot_qualia_3d(self, subsamp = 300) -> tuple[plt.Figure, np.ndarray]:
         # Labels for color spaces
         labels = self._labels
         # Plot qualia prototype groups
-        df_qualia, prototypes = self.qualia.dropna(subset='color_family'), self.prototypes
+        df_qualia = self.qualia.dropna(subset='color_family').sample(n=subsamp)
+        prototypes = self.prototypes
         df_rgb = df_qualia.loc[:, ['r', 'g', 'b']]
         axlabs = ['xlabel', 'ylabel', 'zlabel']
         # Plot the qualia space of the perceiver
@@ -106,7 +109,7 @@ class Perceiver():
         for ax, lab in zip(axs.ravel(), labels):
             df = df_qualia.loc[:, lab]
             c = df_rgb.values
-            edgecolors = df_qualia.loc[:, 'color_family'].values
+            edgecolors = df_rgb.values # df_qualia.loc[:, 'color_family'].values
             ax.scatter3D(*df.values.T, c=c, edgecolors=edgecolors)
 
             _ = ax.set(
@@ -114,9 +117,9 @@ class Perceiver():
                     x: r'$\bf{' + f'{l.upper()}' + '}$'
                     for x, l in zip(axlabs, lab)
                 })
-        return fig, axs
+        return (fig, axs)
 
-    def plot_qualia_2d(self) -> list[plt.figure, np.array]:
+    def plot_qualia_2d(self) -> tuple[plt.Figure, np.ndarray]:
         df_qualia = self.qualia.dropna(subset='color_family')
         labels = self._labels
         df_rgb = df_qualia.loc[:, ['r', 'g', 'b']]/255
@@ -184,6 +187,23 @@ class Perceiver():
         self.clustering = clustering
         self.clust_labels = clust_labels
 
+    def show_samples(self):
+        manifolds = self.manifolds
+        clustering = self.clustering
+        clust_labels = self.clust_labels
+        labels = self._labels
+        fig, axs = plt.subplots(nrows=2, ncols=3, figsize=[16, 5])
+        for x, label in enumerate(labels):
+            ax = axs[0, x]
+            df_qualia = self.qualia.dropna(
+                subset='color_family').loc[:, label]
+            c = self.qualia.loc[df_qualia.index, ['r', 'g', 'b']].values
+            learn_s = manifolds[label]
+            edgecolors = [
+                f"xkcd:{c}" for c in self.qualia.loc[df_qualia.index,'color_family'].values
+            ]
+            _ = ax.scatter(*learn_s[:, :2].T, c=c, edgecolors=edgecolors)
+
     @staticmethod
     def map_clst_to_labels(true_labels, pred_labels, names, ret_labels=False):
         # first make a confussion matrix relating true and predicted
@@ -199,6 +219,10 @@ class Perceiver():
 
     def cluster_perception(self, show=False, score_metric="v_measure_score"):
         n_colors = self.prototypes.shape[0]
+        if score_metric in {'f1_score'}:
+            kwargs_metric = dict(average='weighted')
+        else:
+            kwargs_metric = dict()
         acc_metric = getattr(metrics, score_metric)
         ret = []
         for label in self._labels:
@@ -224,8 +248,11 @@ class Perceiver():
             clust_labels = prototypes.iloc[idx_2_ids].index
             # give prediction of the test labels
             predictions = clust.predict(test.values)
-            score = acc_metric(test_l.values,
-                                 clust_labels[predictions].values)
+            score = acc_metric(
+                test_l.values,
+                clust_labels[predictions].values,
+                **kwargs_metric
+                )
             ret.append(score)
             if show:
                 fig, axs = plt.subplots(3, 1)
@@ -242,7 +269,7 @@ class Perceiver():
                 _ = axs[2].set_title('eval')
         return ret
 
-    def plot_2d_prototypes(self) -> list[plt.figure, np.array]:
+    def plot_2d_prototypes(self) -> list[plt.Figure, np.ndarray]:
         ncols, nrows = [
             func(np.sqrt(self.prototypes.shape[0])).astype(int)
             for func in [np.ceil, np.floor]
@@ -300,8 +327,10 @@ if __name__ == "__main__":
     obs_load = datetime.now()
     # observer_ih = Perceiver(file_color, inv_hue)
     # observer_is = Perceiver(file_color, inv_sat)
-    # observer_iv = Perceiver(file_color, inv_val)
-    # scores = observer.test_classification()
-    # scores_ih = observer_ih.test_classification()
+    observer_iv = Perceiver(file_color, rand_hue)
+    # Some tests in scoring
+    score_metric = "f1_score"
+    scores = observer.test_classification(score_metric)
+    scores_ih = observer_ih.test_classification(score_metric)
     # scores_is = observer_is.test_classification()
     # scores_iv = observer_iv.test_classification()
