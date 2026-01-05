@@ -3,6 +3,7 @@
 Map colors into DataFrames
 '''
 
+from dataclasses import dataclass
 from typing import TextIO, Union, Callable
 import numpy as np
 import pandas as pd
@@ -10,48 +11,54 @@ import pandas as pd
 from pandas import IndexSlice as idx
 from skimage.color import rgb2hsv, rgb2lab, hsv2rgb
 
-
-class color():
+@dataclass
+class color:
+    name: str
+    hex_rgb: str
     # A python class that receives a name and a hexadecimal RGB value for a color,
     #  The class has as attributes the color value in RGB, CIELAB, and HSV
-    def __init__(self, name: str, hex_rgb: list):
-        self.name = name
-        pass
+
+    def __post_init__(self):
+        self.set_values()
 
     def __repr__(self) -> str:
-        pass
+        return f"Color(name={self.name!r}, hex_rgb={self.hex_rgb!r})"
 
     def set_values(self):
         # Set all the values
-        pass
+        self._rgb = np.array([int(self.values[i:i+2], 16) for i in [0, 2, 4]])/255
+        self._hsv = rgb2hsv(self._rgb)
+        self._lab = rgb2lab(self._rgb)
 
-    def name(self) -> str:
-        # return the color name
-        return self.name
+    @property
+    def values(self) -> np.ndarray:
+        return self.hex_rgb.replace("#", "")
 
+    @property
     def rgb(self) -> list[int]:
         # return the color in RGB space
         # in float, so range\in(0,1)
-        return self.rgb
+        return self._rgb
 
+    @property
     def hsv(self) -> list[int]:
         # return the color in HSV space
         # in float, so range\in(0,1)
-        return self.hsv
+        return self._hsv
 
+    @property
     def lab(self) -> list[int]:
         # return the color in CIElab space
         # in float, so range[l]\in(0,100); range[a,b]\in(-128,127)
-        return self.lab
+        return self._lab
 
-    def patch(self) -> np.array:
-        # make a small path of the color
-        pass
+    def patch(self, size: list[int] = [120, 120, 1]) -> np.array:
+        # make a small path of the color in RGB
+        return np.tile(self.rgb, size)
 
 
 # a function that receives a csv file with two columns and one header
 # First column is a color name, second the RGB value in hexadecimal
-
 def get_df_qualia(file: TextIO) -> pd.DataFrame:
     if 'rgb' in file.name:
         ret = read_csv_rgb(file)
